@@ -294,8 +294,9 @@ class SendspinClient:
         """Perform Sendspin handshake (client/hello -> server/hello)."""
         # Build supported formats (prefer user's choice, include fallbacks)
         formats = []
+        seen_codecs = set()
 
-        # Add preferred codec
+        # Add preferred codec first
         if self._preferred_codec == "opus":
             formats.append(AudioFormat(
                 codec="opus",
@@ -303,6 +304,7 @@ class SendspinClient:
                 sample_rate=48000,
                 bit_depth=16,
             ))
+            seen_codecs.add("opus")
         elif self._preferred_codec == "flac":
             formats.append(AudioFormat(
                 codec="flac",
@@ -310,20 +312,23 @@ class SendspinClient:
                 sample_rate=48000,
                 bit_depth=16,
             ))
+            seen_codecs.add("flac")
 
-        # Add fallbacks
-        formats.append(AudioFormat(
-            codec="opus",
-            channels=2,
-            sample_rate=48000,
-            bit_depth=16,
-        ))
-        formats.append(AudioFormat(
-            codec="pcm",
-            channels=2,
-            sample_rate=48000,
-            bit_depth=16,
-        ))
+        # Add fallbacks (only if not already added)
+        if "opus" not in seen_codecs:
+            formats.append(AudioFormat(
+                codec="opus",
+                channels=2,
+                sample_rate=48000,
+                bit_depth=16,
+            ))
+        if "pcm" not in seen_codecs:
+            formats.append(AudioFormat(
+                codec="pcm",
+                channels=2,
+                sample_rate=48000,
+                bit_depth=16,
+            ))
 
         # Send client/hello
         hello = ClientHello(
@@ -336,7 +341,8 @@ class SendspinClient:
                 "software_version": "1.0.0",
             },
             supported_formats=formats,
-            buffer_capacity=self._buffer_capacity_ms * 1000,
+            # buffer_capacity in bytes: 48000 samples/sec * 2 channels * 2 bytes * (ms/1000)
+            buffer_capacity=int(48000 * 2 * 2 * self._buffer_capacity_ms / 1000),
             supported_commands=["volume", "mute"],
         )
 
