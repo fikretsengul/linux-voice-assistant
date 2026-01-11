@@ -340,11 +340,21 @@ class SendspinClient:
             supported_commands=["volume", "mute"],
         )
 
-        await self._websocket.send(hello.to_json())
-        _LOGGER.debug("Sent client/hello")
+        hello_json = hello.to_json()
+        _LOGGER.debug("Sending client/hello: %s", hello_json)
+        await self._websocket.send(hello_json)
+        _LOGGER.debug("Sent client/hello, waiting for server/hello...")
 
-        # Wait for server/hello
-        response = await self._websocket.recv()
+        # Wait for server/hello with timeout
+        try:
+            response = await asyncio.wait_for(
+                self._websocket.recv(),
+                timeout=10.0
+            )
+            _LOGGER.debug("Received response: %s", response[:500] if isinstance(response, str) else response[:100])
+        except asyncio.TimeoutError:
+            raise RuntimeError("Timeout waiting for server/hello (10s)")
+
         msg_type, payload = parse_json_message(response)
 
         if msg_type != "server/hello":
