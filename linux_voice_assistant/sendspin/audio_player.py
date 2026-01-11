@@ -56,6 +56,7 @@ class MpvOutputStream:
         self._samplerate = samplerate
         self._channels = channels
         self._proc: Optional[subprocess.Popen] = None
+        self._bytes_written: int = 0
 
     def __enter__(self) -> "MpvOutputStream":
         """Start mpv process."""
@@ -109,6 +110,10 @@ class MpvOutputStream:
             try:
                 self._proc.stdin.write(data)
                 self._proc.stdin.flush()
+                self._bytes_written += len(data)
+                # Log first few writes and periodically
+                if self._bytes_written <= 10000 or self._bytes_written % 500000 == 0:
+                    _LOGGER.debug("mpv write: %d bytes (total: %d)", len(data), self._bytes_written)
             except BrokenPipeError:
                 _LOGGER.warning("mpv pipe broken - process may have exited")
 
@@ -421,12 +426,24 @@ class SendspinAudioPlayer:
                 )
 
                 # Wait for minimum buffer before starting
+                _LOGGER.debug("Waiting for buffer to fill (need %d ms)...", self.MIN_BUFFER_US // 1000)
+                wait_count = 0
                 while self._playing.is_set() and not self._stop_requested.is_set():
                     if self._buffer_duration_us >= self.MIN_BUFFER_US:
+                        _LOGGER.info(
+                            "Buffer ready: %d ms, clock offset=%.0f us, sync_quality=%s",
+                            self._buffer_duration_us // 1000,
+                            self._clock_sync.offset_us,
+                            self._clock_sync.sync_quality,
+                        )
                         break
+                    wait_count += 1
+                    if wait_count % 100 == 0:  # Log every ~1 second
+                        _LOGGER.debug("Still waiting for buffer: %d ms", self._buffer_duration_us // 1000)
                     time.sleep(0.01)
 
                 # Main playback loop
+                _LOGGER.debug("Starting main playback loop")
                 while self._playing.is_set() and not self._stop_requested.is_set():
                     if not stream.active:
                         _LOGGER.error("mpv process exited unexpectedly")
@@ -502,8 +519,25 @@ class SendspinAudioPlayer:
         # Calculate timing
         delta_us = target_time_us - current_time_us
 
+        # Debug logging for first few chunks and periodically
+        if self._chunks_played < 5 or self._chunks_played % 500 == 0:
+            _LOGGER.debug(
+                "Chunk timing: server_ts=%d, target_local=%d, current=%d, delta=%d us (%.1f ms), offset=%.0f us",
+                chunk.timestamp_us,
+                target_time_us,
+                current_time_us,
+                delta_us,
+                delta_us / 1000,
+                self._clock_sync.offset_us,
+            )
+
         if delta_us > self.MAX_EARLY_US:
             # Way too early, wait a bit
+            if self._chunks_received < 10:
+                _LOGGER.warning(
+                    "Chunk too early: delta=%d us (%.1f s) > MAX_EARLY=%d us",
+                    delta_us, delta_us / 1_000_000, self.MAX_EARLY_US
+                )
             time.sleep(0.01)
             return
 
@@ -518,7 +552,11 @@ class SendspinAudioPlayer:
             self._pop_chunk()
             self._chunks_dropped += 1
             self._set_sync_state(SyncState.DESYNCED)
-            _LOGGER.debug("Dropped late chunk: %d us late", -delta_us)
+            if self._chunks_dropped < 10 or self._chunks_dropped % 100 == 0:
+                _LOGGER.warning(
+                    "Dropped late chunk #%d: %d us late (%.1f ms)",
+                    self._chunks_dropped, -delta_us, -delta_us / 1000
+                )
             return
 
         else:
@@ -530,6 +568,13 @@ class SendspinAudioPlayer:
         if chunk:
             self._play_audio(stream, chunk.pcm_data)
             self._chunks_played += 1
+            if self._chunks_played <= 5 or self._chunks_played % 500 == 0:
+                _LOGGER.debug(
+                    "Played chunk #%d (%d bytes), buffer=%d ms",
+                    self._chunks_played,
+                    len(chunk.pcm_data),
+                    self._buffer_duration_us // 1000,
+                )
 
     def _peek_next_chunk(self) -> Optional[AudioChunk]:
         """Peek at the next chunk without removing it."""
