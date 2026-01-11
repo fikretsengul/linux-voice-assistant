@@ -68,6 +68,28 @@ class ButtonConfig:
 
 
 @dataclass
+class SendspinConfig:
+    """Settings for the Sendspin Protocol client (Music Assistant multi-room audio).
+
+    Sendspin provides synchronized audio playback across multiple devices.
+    See: https://github.com/Sendspin/spec
+    """
+    enabled: bool = False
+    # WebSocket URL of the Sendspin server (e.g., "ws://192.168.1.100:8927/sendspin")
+    server_url: Optional[str] = None
+    # Friendly name shown in Music Assistant (defaults to app.name)
+    client_name: Optional[str] = None
+    # Preferred audio codec: "opus", "flac", or "pcm"
+    preferred_codec: str = "opus"
+    # Audio buffer size in milliseconds (higher = more latency but smoother)
+    buffer_capacity_ms: int = 2000
+    # Seconds to wait before reconnecting after disconnect
+    reconnect_delay: float = 5.0
+    # Seconds between clock synchronization messages
+    clock_sync_interval: float = 5.0
+
+
+@dataclass
 class AppConfig:
     """General application settings."""
     name: str
@@ -87,6 +109,7 @@ class Config:
     led: LedConfig = field(default_factory=LedConfig)
     mqtt: MqttConfig = field(default_factory=MqttConfig)
     button: ButtonConfig = field(default_factory=ButtonConfig)
+    sendspin: SendspinConfig = field(default_factory=SendspinConfig)
 
 # -----------------------------------------------------------------------------
 # Helper Function
@@ -119,10 +142,15 @@ def load_config_from_json(config_path: Path) -> Config:
     led_config = LedConfig(**raw_data.get("led", {}))
     mqtt_config = MqttConfig(**raw_data.get("mqtt", {}))
     button_config = ButtonConfig(**raw_data.get("button", {}))
+    sendspin_config = SendspinConfig(**raw_data.get("sendspin", {}))
 
     # --- Step 3: Set MQTT 'enabled' flag ---
     if mqtt_config.host:
         mqtt_config.enabled = True
+
+    # --- Step 3b: Set Sendspin 'enabled' flag ---
+    if sendspin_config.server_url:
+        sendspin_config.enabled = True
 
     # --- Step 4: Return the main Config object ---
     return Config(
@@ -133,4 +161,5 @@ def load_config_from_json(config_path: Path) -> Config:
         led=led_config,
         mqtt=mqtt_config,
         button=button_config,
+        sendspin=sendspin_config,
     )

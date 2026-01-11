@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .entity import ESPHomeEntity
     from .mpv_player import MpvMediaPlayer
     from .satellite import VoiceSatelliteProtocol
+    from .sendspin import SendspinClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,6 +94,7 @@ class ServerState:
 
     # --- Fields WITH default values ---
     satellite: "Optional[VoiceSatelliteProtocol]" = None
+    sendspin_client: "Optional[SendspinClient]" = None
     wake_words_changed: bool = False
     refractory_seconds: float = 2.0
     mic_muted: bool = False

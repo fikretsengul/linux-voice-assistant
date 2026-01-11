@@ -1,5 +1,40 @@
 {
   "app": {
-    "name": "Linux Voice Assistant"
+    "name": "Test Asistanı",
+    "debug": true,
+    "wakeup_sound": "sounds/wake_word_triggered.flac",
+    "timer_finished_sound": "sounds/timer_finished.flac",
+    "preferences_file": "preferences.json"
+  },
+  "audio": {
+    "input_device": "SOUNDPEATS PureVoice_d97e",
+    "output_device": "pulse/bluez_output.70_4F_08_02_D9_7E.1",
+    "input_block_size": 1024
+  },
+  "wake_word": {
+    "directories": [
+      "wakewords",
+      "wakewords/openWakeWord"
+    ],
+    "model": "okay_nabu",
+    "stop_model": "stop",
+    "refractory_seconds": 2.0
+  },
+  "esphome": {
+    "host": "0.0.0.0",
+    "port": 6053
+  },
+  "led": {
+    "led_type": "dotstar",
+    "interface": "gpio",
+    "num_leds": 0
+  },
+  "mqtt": {
+    "host": null
+  },
+  "sendspin": {
+    "server_url": "ws://192.168.1.77:8927/sendspin",
+    "preferred_codec": "opus",
+    "client_name": "Living Room Speaker"
   }
 }

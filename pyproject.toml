@@ -56,6 +56,13 @@ tray = [
     "PyQt5>=5.15",
 ]
 
+# Optional Sendspin Protocol dependencies for multi-room audio sync with Music Assistant.
+sendspin = [
+    "websockets>=12,<14",
+    "opuslib>=3,<4",
+    "sounddevice>=0.4,<1",
+]
+
 [project.urls]
 "Source Code" = "https://github.com/imonlinux/linux-voice-assistant"
 

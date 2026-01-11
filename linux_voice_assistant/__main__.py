@@ -168,6 +168,10 @@ async def main() -> None:
     # --- 7. Initialize Controllers ---
     _init_controllers(loop, event_bus, state, config, preferences)
 
+    # --- 7.5. Initialize Sendspin Client (if configured) ---
+    if config.sendspin.enabled:
+        _init_sendspin(loop, event_bus, state, config)
+
     # --- 8. Start Audio Engine ---
     audio_engine = AudioEngine(state, mic, config.audio.input_block_size)
     audio_engine.start()
@@ -183,6 +187,12 @@ async def main() -> None:
         if hasattr(state, "mqtt_controller") and state.mqtt_controller:
             _LOGGER.debug("Stopping MQTT controller...")
             state.mqtt_controller.stop()
+
+        if state.sendspin_client:
+            _LOGGER.debug("Disconnecting Sendspin client...")
+            asyncio.run_coroutine_threadsafe(
+                state.sendspin_client.disconnect(), state.loop
+            ).result(timeout=5.0)
 
 # -----------------------------------------------------------------------------
 # Helper Functions
@@ -441,6 +451,44 @@ def _init_controllers(
             _LOGGER.debug("ButtonController not enabled in config; skipping")
     except Exception:
         _LOGGER.exception("Failed to initialize ButtonController")
+
+
+def _init_sendspin(
+    loop: asyncio.AbstractEventLoop,
+    event_bus: EventBus,
+    state: ServerState,
+    config: Config,
+):
+    """Initializes the Sendspin Protocol client for multi-room audio."""
+    from .sendspin import SendspinClient
+
+    if not config.sendspin.server_url:
+        _LOGGER.warning("Sendspin enabled but no server_url configured; skipping")
+        return
+
+    client_name = config.sendspin.client_name or config.app.name
+
+    try:
+        client = SendspinClient(
+            server_url=config.sendspin.server_url,
+            client_name=client_name,
+            preferred_codec=config.sendspin.preferred_codec,
+            buffer_capacity_ms=config.sendspin.buffer_capacity_ms,
+            reconnect_delay=config.sendspin.reconnect_delay,
+            clock_sync_interval=config.sendspin.clock_sync_interval,
+            loop=loop,
+            event_bus=event_bus,
+        )
+        state.sendspin_client = client
+
+        # Start connection in background task
+        asyncio.run_coroutine_threadsafe(client.connect(), loop)
+        _LOGGER.info(
+            "Sendspin client initialized for server: %s", config.sendspin.server_url
+        )
+    except Exception:
+        _LOGGER.exception("Failed to initialize Sendspin client")
+
 
 async def _run_server(state: ServerState, config: Config):
     """Starts the ESPHome server and ZeroConf discovery."""
