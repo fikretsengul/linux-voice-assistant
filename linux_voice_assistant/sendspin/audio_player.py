@@ -86,15 +86,16 @@ class MpvOutputStream:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Stop mpv process."""
+        """Stop mpv process immediately."""
         if self._proc:
             try:
-                if self._proc.stdin:
-                    self._proc.stdin.close()
-                self._proc.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-                self._proc.wait()
+                # Terminate immediately for responsive stop
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+                    self._proc.wait()
             except Exception as e:
                 _LOGGER.warning("Error closing mpv: %s", e)
             finally:
@@ -170,6 +171,7 @@ class SendspinAudioPlayer:
         output_device: Optional[str] = None,
         mpv_audio_device: Optional[str] = None,
         buffer_capacity_us: int = 15_000_000,  # 15 seconds - server sends chunks 3-6s early
+        low_latency_mode: bool = False,
         on_state_change: Optional[Callable[[str], None]] = None,
     ) -> None:
         """Initialize the audio player.
@@ -180,6 +182,8 @@ class SendspinAudioPlayer:
             mpv_audio_device: Audio device for mpv (e.g., "pulse/bluez_output.xxx").
                               If set, mpv is used instead of sounddevice.
             buffer_capacity_us: Maximum buffer size in microseconds
+            low_latency_mode: If True, play chunks immediately without waiting for
+                              timestamps. Reduces latency but breaks multi-room sync.
             on_state_change: Callback when sync state changes
         """
         # Determine which backend to use
@@ -200,7 +204,11 @@ class SendspinAudioPlayer:
         self._clock_sync = clock_sync
         self._output_device = output_device
         self._buffer_capacity_us = buffer_capacity_us
+        self._low_latency_mode = low_latency_mode
         self._on_state_change = on_state_change
+
+        if low_latency_mode:
+            _LOGGER.info("Sendspin low latency mode enabled - multi-room sync disabled")
 
         # Audio configuration
         self._codec: str = "opus"
@@ -523,73 +531,79 @@ class SendspinAudioPlayer:
             time.sleep(0.001)
             return
 
-        # Convert server timestamp to local time
-        target_time_us = self._clock_sync.server_to_local(chunk.timestamp_us)
-        current_time_us = self._clock_sync.get_local_time_us()
+        # Low latency mode: skip timestamp waiting, play immediately
+        if self._low_latency_mode:
+            self._set_sync_state(SyncState.SYNCHRONIZED)
+            # Skip to playing the chunk (fall through to pop and play)
+        else:
+            # Normal mode: wait for correct timestamp for multi-room sync
+            # Convert server timestamp to local time
+            target_time_us = self._clock_sync.server_to_local(chunk.timestamp_us)
+            current_time_us = self._clock_sync.get_local_time_us()
 
-        # Calculate timing
-        delta_us = target_time_us - current_time_us
+            # Calculate timing
+            delta_us = target_time_us - current_time_us
 
-        # Track wait iterations for this chunk (reset when we play or drop)
-        if not hasattr(self, '_wait_iterations'):
-            self._wait_iterations = 0
-            self._last_chunk_ts = 0
+            # Track wait iterations for this chunk (reset when we play or drop)
+            if not hasattr(self, '_wait_iterations'):
+                self._wait_iterations = 0
+                self._last_chunk_ts = 0
 
-        # Reset counter if we're looking at a new chunk
-        if chunk.timestamp_us != self._last_chunk_ts:
-            self._wait_iterations = 0
-            self._last_chunk_ts = chunk.timestamp_us
+            # Reset counter if we're looking at a new chunk
+            if chunk.timestamp_us != self._last_chunk_ts:
+                self._wait_iterations = 0
+                self._last_chunk_ts = chunk.timestamp_us
 
-        self._wait_iterations += 1
+            self._wait_iterations += 1
 
-        # Log periodically during wait (every 10 iterations = ~1 second)
-        if self._wait_iterations == 1 or self._wait_iterations % 10 == 0:
-            _LOGGER.debug(
-                "Chunk wait #%d: delta=%.1f ms (%.2f s), buffer=%d ms, chunks_played=%d",
-                self._wait_iterations,
-                delta_us / 1000,
-                delta_us / 1_000_000,
-                self._buffer_duration_us // 1000,
-                self._chunks_played,
-            )
+            # Log periodically during wait (every 10 iterations = ~1 second)
+            if self._wait_iterations == 1 or self._wait_iterations % 10 == 0:
+                _LOGGER.debug(
+                    "Chunk wait #%d: delta=%.1f ms (%.2f s), buffer=%d ms, chunks_played=%d",
+                    self._wait_iterations,
+                    delta_us / 1000,
+                    delta_us / 1_000_000,
+                    self._buffer_duration_us // 1000,
+                    self._chunks_played,
+                )
 
-        if delta_us > self.MAX_EARLY_US:
-            # Way too early - this indicates a severe sync issue
-            _LOGGER.warning(
-                "Chunk extremely early: delta=%.1f s > MAX_EARLY=%.1f s - possible clock sync issue",
-                delta_us / 1_000_000, self.MAX_EARLY_US / 1_000_000
-            )
-            time.sleep(0.1)
-            return
-
-        if delta_us > 0:
-            # Chunk is early, wait for it (in small increments to stay responsive)
-            wait_us = min(delta_us, self.MAX_WAIT_SLEEP_US)
-            wait_seconds = wait_us / 1_000_000
-            time.sleep(wait_seconds)
-
-            # If we haven't waited the full delta, return and re-check
-            # This keeps the thread responsive during long waits
-            if delta_us > self.MAX_WAIT_SLEEP_US:
+            if delta_us > self.MAX_EARLY_US:
+                # Way too early - this indicates a severe sync issue
+                _LOGGER.warning(
+                    "Chunk extremely early: delta=%.1f s > MAX_EARLY=%.1f s - possible clock sync issue",
+                    delta_us / 1_000_000, self.MAX_EARLY_US / 1_000_000
+                )
+                time.sleep(0.1)
                 return
 
-            self._set_sync_state(SyncState.SYNCHRONIZED)
+            if delta_us > 0:
+                # Chunk is early, wait for it (in small increments to stay responsive)
+                wait_us = min(delta_us, self.MAX_WAIT_SLEEP_US)
+                wait_seconds = wait_us / 1_000_000
+                time.sleep(wait_seconds)
 
-        elif delta_us < -self.MAX_LATE_US:
-            # Too late, drop this chunk
-            self._pop_chunk()
-            self._chunks_dropped += 1
-            self._set_sync_state(SyncState.DESYNCED)
-            if self._chunks_dropped < 10 or self._chunks_dropped % 100 == 0:
-                _LOGGER.warning(
-                    "Dropped late chunk #%d: %d us late (%.1f ms)",
-                    self._chunks_dropped, -delta_us, -delta_us / 1000
-                )
-            return
+                # If we haven't waited the full delta, return and re-check
+                # This keeps the thread responsive during long waits
+                if delta_us > self.MAX_WAIT_SLEEP_US:
+                    return
 
-        else:
-            # On time or slightly late, play it
-            self._set_sync_state(SyncState.SYNCHRONIZED)
+                self._set_sync_state(SyncState.SYNCHRONIZED)
+
+            elif delta_us < -self.MAX_LATE_US:
+                # Too late, drop this chunk
+                self._pop_chunk()
+                self._chunks_dropped += 1
+                self._set_sync_state(SyncState.DESYNCED)
+                if self._chunks_dropped < 10 or self._chunks_dropped % 100 == 0:
+                    _LOGGER.warning(
+                        "Dropped late chunk #%d: %d us late (%.1f ms)",
+                        self._chunks_dropped, -delta_us, -delta_us / 1000
+                    )
+                return
+
+            else:
+                # On time or slightly late, play it
+                self._set_sync_state(SyncState.SYNCHRONIZED)
 
         # Pop and play the chunk
         chunk = self._pop_chunk()
