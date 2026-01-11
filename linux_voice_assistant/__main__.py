@@ -468,11 +468,25 @@ def _init_sendspin(
 
     client_name = config.sendspin.client_name or config.app.name
 
+    # Determine audio output: if sendspin.output_device is None, use mpv with main audio device
+    # This provides best compatibility with PulseAudio in containers
+    if config.sendspin.output_device is None:
+        # Use mpv backend with main audio.output_device (works with PulseAudio)
+        mpv_audio_device = config.audio.output_device
+        sounddevice_output = None
+        _LOGGER.info("Sendspin will use mpv for audio output: %s", mpv_audio_device)
+    else:
+        # User explicitly configured a sounddevice-compatible device
+        mpv_audio_device = None
+        sounddevice_output = config.sendspin.output_device
+        _LOGGER.info("Sendspin will use sounddevice for audio output: %s", sounddevice_output)
+
     try:
         client = SendspinClient(
             server_url=config.sendspin.server_url,
             client_name=client_name,
-            output_device=config.sendspin.output_device,  # Separate from audio.output_device
+            output_device=sounddevice_output,
+            mpv_audio_device=mpv_audio_device,
             preferred_codec=config.sendspin.preferred_codec,
             buffer_capacity_ms=config.sendspin.buffer_capacity_ms,
             reconnect_delay=config.sendspin.reconnect_delay,

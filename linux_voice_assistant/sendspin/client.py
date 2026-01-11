@@ -68,6 +68,7 @@ class SendspinClient:
         server_url: str,
         client_name: str,
         output_device: Optional[str] = None,
+        mpv_audio_device: Optional[str] = None,
         preferred_codec: str = "opus",
         buffer_capacity_ms: int = 2000,
         reconnect_delay: float = 5.0,
@@ -80,7 +81,9 @@ class SendspinClient:
         Args:
             server_url: WebSocket URL (e.g., "ws://192.168.1.100:8927/sendspin")
             client_name: Friendly name shown in Music Assistant
-            output_device: Audio output device (None for default)
+            output_device: Audio output device for sounddevice (None for default)
+            mpv_audio_device: Audio device for mpv (e.g., "pulse/bluez_output.xxx").
+                              If set, mpv is used instead of sounddevice.
             preferred_codec: Preferred audio codec ("opus", "flac", "pcm")
             buffer_capacity_ms: Audio buffer size in milliseconds
             reconnect_delay: Seconds between reconnection attempts
@@ -97,6 +100,7 @@ class SendspinClient:
         self._server_url = server_url
         self._client_name = client_name
         self._output_device = output_device
+        self._mpv_audio_device = mpv_audio_device
         self._preferred_codec = preferred_codec
         self._buffer_capacity_ms = buffer_capacity_ms
         self._reconnect_delay = reconnect_delay
@@ -382,6 +386,7 @@ class SendspinClient:
             self._audio_player = SendspinAudioPlayer(
                 clock_sync=self._clock_sync,
                 output_device=self._output_device,
+                mpv_audio_device=self._mpv_audio_device,
                 buffer_capacity_us=self._buffer_capacity_ms * 1000,
                 on_state_change=self._on_sync_state_change,
             )

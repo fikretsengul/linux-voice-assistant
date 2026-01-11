@@ -8,24 +8,114 @@ players in the multi-room audio group.
 
 import logging
 import queue
+import shutil
+import subprocess
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable, Deque, Optional
+from typing import Callable, Deque, Optional, Union
 
 from .clock_sync import KalmanClockSync
 from .decoder import AudioDecoder, get_decoder
 
 _LOGGER = logging.getLogger(__name__)
 
-# Try to import sounddevice
+# Check for mpv availability (preferred for PulseAudio/container setups)
+MPV_AVAILABLE = shutil.which("mpv") is not None
+
+# Try to import sounddevice (fallback)
 try:
     import sounddevice as sd
     SOUNDDEVICE_AVAILABLE = True
 except ImportError:
     SOUNDDEVICE_AVAILABLE = False
-    _LOGGER.warning("sounddevice not installed - Sendspin audio output unavailable")
+
+
+class MpvOutputStream:
+    """Audio output stream using mpv subprocess.
+
+    This provides better compatibility with PulseAudio in containers
+    where sounddevice/PortAudio may not work properly.
+    """
+
+    def __init__(
+        self,
+        device: Optional[str],
+        samplerate: int,
+        channels: int,
+    ) -> None:
+        """Initialize mpv output stream.
+
+        Args:
+            device: Audio device in mpv format (e.g., "pulse/bluez_output.xxx")
+            samplerate: Sample rate in Hz
+            channels: Number of audio channels
+        """
+        self._device = device
+        self._samplerate = samplerate
+        self._channels = channels
+        self._proc: Optional[subprocess.Popen] = None
+
+    def __enter__(self) -> "MpvOutputStream":
+        """Start mpv process."""
+        cmd = [
+            "mpv",
+            "--no-terminal",
+            "--no-video",
+            "--no-cache",
+            "--audio-buffer=0",
+            "--demuxer=rawaudio",
+            f"--demuxer-rawaudio-rate={self._samplerate}",
+            f"--demuxer-rawaudio-channels={self._channels}",
+            "--demuxer-rawaudio-format=s16le",
+            "-",  # Read from stdin
+        ]
+
+        if self._device:
+            cmd.insert(1, f"--audio-device={self._device}")
+
+        _LOGGER.debug("Starting mpv: %s", " ".join(cmd))
+        self._proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Stop mpv process."""
+        if self._proc:
+            try:
+                if self._proc.stdin:
+                    self._proc.stdin.close()
+                self._proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait()
+            except Exception as e:
+                _LOGGER.warning("Error closing mpv: %s", e)
+            finally:
+                self._proc = None
+
+    def write(self, data: bytes) -> None:
+        """Write PCM audio data to mpv.
+
+        Args:
+            data: Raw PCM audio (signed 16-bit LE)
+        """
+        if self._proc and self._proc.stdin:
+            try:
+                self._proc.stdin.write(data)
+                self._proc.stdin.flush()
+            except BrokenPipeError:
+                _LOGGER.warning("mpv pipe broken - process may have exited")
+
+    @property
+    def active(self) -> bool:
+        """Check if mpv process is still running."""
+        return self._proc is not None and self._proc.poll() is None
 
 
 @dataclass
@@ -50,6 +140,10 @@ class SendspinAudioPlayer:
     outputs them at the correct time according to the synchronized clock.
     It handles jitter absorption, late chunk detection, and resampling
     to maintain synchronization.
+
+    Supports two audio backends:
+    - mpv: Preferred for PulseAudio setups, especially in containers
+    - sounddevice: Fallback using PortAudio
     """
 
     # Maximum time a chunk can be late before it's dropped (microseconds)
@@ -65,6 +159,7 @@ class SendspinAudioPlayer:
         self,
         clock_sync: KalmanClockSync,
         output_device: Optional[str] = None,
+        mpv_audio_device: Optional[str] = None,
         buffer_capacity_us: int = 2_000_000,
         on_state_change: Optional[Callable[[str], None]] = None,
     ) -> None:
@@ -72,15 +167,26 @@ class SendspinAudioPlayer:
 
         Args:
             clock_sync: Clock synchronization object
-            output_device: Audio output device name (None for default)
+            output_device: Audio output device for sounddevice (None for default)
+            mpv_audio_device: Audio device for mpv (e.g., "pulse/bluez_output.xxx").
+                              If set, mpv is used instead of sounddevice.
             buffer_capacity_us: Maximum buffer size in microseconds
             on_state_change: Callback when sync state changes
         """
-        if not SOUNDDEVICE_AVAILABLE:
+        # Determine which backend to use
+        self._use_mpv = mpv_audio_device is not None and MPV_AVAILABLE
+        self._mpv_audio_device = mpv_audio_device
+
+        if not self._use_mpv and not SOUNDDEVICE_AVAILABLE:
             raise RuntimeError(
-                "SendspinAudioPlayer requires sounddevice. "
-                "Install with: pip install sounddevice"
+                "SendspinAudioPlayer requires either mpv or sounddevice. "
+                "Install mpv or: pip install sounddevice"
             )
+
+        if self._use_mpv:
+            _LOGGER.info("Sendspin will use mpv for audio output: %s", mpv_audio_device)
+        else:
+            _LOGGER.info("Sendspin will use sounddevice for audio output")
 
         self._clock_sync = clock_sync
         self._output_device = output_device
@@ -296,6 +402,44 @@ class SendspinAudioPlayer:
 
     def _playback_loop(self) -> None:
         """Main playback thread loop."""
+        if self._use_mpv:
+            self._playback_loop_mpv()
+        else:
+            self._playback_loop_sounddevice()
+
+    def _playback_loop_mpv(self) -> None:
+        """Playback loop using mpv backend."""
+        try:
+            with MpvOutputStream(
+                device=self._mpv_audio_device,
+                samplerate=self._sample_rate,
+                channels=self._channels,
+            ) as stream:
+                _LOGGER.info(
+                    "Sendspin mpv audio output opened: %s",
+                    self._mpv_audio_device or "default",
+                )
+
+                # Wait for minimum buffer before starting
+                while self._playing.is_set() and not self._stop_requested.is_set():
+                    if self._buffer_duration_us >= self.MIN_BUFFER_US:
+                        break
+                    time.sleep(0.01)
+
+                # Main playback loop
+                while self._playing.is_set() and not self._stop_requested.is_set():
+                    if not stream.active:
+                        _LOGGER.error("mpv process exited unexpectedly")
+                        self._set_sync_state(SyncState.ERROR)
+                        break
+                    self._process_audio_chunk(stream)
+
+        except Exception as e:
+            _LOGGER.error("Playback error (mpv): %s", e)
+            self._set_sync_state(SyncState.ERROR)
+
+    def _playback_loop_sounddevice(self) -> None:
+        """Playback loop using sounddevice backend."""
         device = self._output_device
 
         # Try configured device, fall back to default if it fails
@@ -322,7 +466,7 @@ class SendspinAudioPlayer:
             ) as stream:
                 self._stream = stream
                 _LOGGER.info(
-                    "Sendspin audio output opened: %s",
+                    "Sendspin sounddevice output opened: %s",
                     stream.device if hasattr(stream, 'device') else "default device",
                 )
 
@@ -337,12 +481,12 @@ class SendspinAudioPlayer:
                     self._process_audio_chunk(stream)
 
         except Exception as e:
-            _LOGGER.error("Playback error: %s", e)
+            _LOGGER.error("Playback error (sounddevice): %s", e)
             self._set_sync_state(SyncState.ERROR)
         finally:
             self._stream = None
 
-    def _process_audio_chunk(self, stream: "sd.OutputStream") -> None:
+    def _process_audio_chunk(self, stream: Union["sd.OutputStream", MpvOutputStream]) -> None:
         """Process and play the next audio chunk if ready."""
         # Get next chunk
         chunk = self._peek_next_chunk()
@@ -405,11 +549,11 @@ class SendspinAudioPlayer:
                 return chunk
             return None
 
-    def _play_audio(self, stream: "sd.OutputStream", pcm_data: bytes) -> None:
+    def _play_audio(self, stream: Union["sd.OutputStream", MpvOutputStream], pcm_data: bytes) -> None:
         """Play PCM audio data with volume applied.
 
         Args:
-            stream: Active output stream
+            stream: Active output stream (sounddevice or mpv)
             pcm_data: Raw PCM audio (signed 16-bit LE)
         """
         if self._muted:
