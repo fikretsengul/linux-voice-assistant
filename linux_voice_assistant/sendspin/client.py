@@ -70,7 +70,7 @@ class SendspinClient:
         output_device: Optional[str] = None,
         mpv_audio_device: Optional[str] = None,
         preferred_codec: str = "opus",
-        buffer_capacity_ms: int = 2000,
+        buffer_capacity_ms: int = 15000,
         reconnect_delay: float = 5.0,
         clock_sync_interval: float = 5.0,
         on_connection_change: Optional[Callable[[str], None]] = None,

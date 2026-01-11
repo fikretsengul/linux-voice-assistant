@@ -86,7 +86,7 @@ class SendspinConfig:
     # Preferred audio codec: "opus", "flac", or "pcm"
     preferred_codec: str = "opus"
     # Audio buffer size in milliseconds (higher = more latency but smoother)
-    buffer_capacity_ms: int = 2000
+    buffer_capacity_ms: int = 15000
     # Seconds to wait before reconnecting after disconnect
     reconnect_delay: float = 5.0
     # Seconds between clock synchronization messages
