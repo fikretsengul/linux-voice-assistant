@@ -523,18 +523,27 @@ class SendspinAudioPlayer:
         # Calculate timing
         delta_us = target_time_us - current_time_us
 
-        # Debug logging for first few played chunks and periodically
-        # Only log when we're about to play (delta <= MAX_WAIT_SLEEP) to avoid spam during wait
-        should_log = (self._chunks_played < 5 or self._chunks_played % 500 == 0) and delta_us <= self.MAX_WAIT_SLEEP_US
-        if should_log:
+        # Track wait iterations for this chunk (reset when we play or drop)
+        if not hasattr(self, '_wait_iterations'):
+            self._wait_iterations = 0
+            self._last_chunk_ts = 0
+
+        # Reset counter if we're looking at a new chunk
+        if chunk.timestamp_us != self._last_chunk_ts:
+            self._wait_iterations = 0
+            self._last_chunk_ts = chunk.timestamp_us
+
+        self._wait_iterations += 1
+
+        # Log periodically during wait (every 10 iterations = ~1 second)
+        if self._wait_iterations == 1 or self._wait_iterations % 10 == 0:
             _LOGGER.debug(
-                "Chunk timing: server_ts=%d, target_local=%d, current=%d, delta=%d us (%.1f ms), offset=%.0f us",
-                chunk.timestamp_us,
-                target_time_us,
-                current_time_us,
-                delta_us,
+                "Chunk wait #%d: delta=%.1f ms (%.2f s), buffer=%d ms, chunks_played=%d",
+                self._wait_iterations,
                 delta_us / 1000,
-                self._clock_sync.offset_us,
+                delta_us / 1_000_000,
+                self._buffer_duration_us // 1000,
+                self._chunks_played,
             )
 
         if delta_us > self.MAX_EARLY_US:
@@ -578,15 +587,16 @@ class SendspinAudioPlayer:
         # Pop and play the chunk
         chunk = self._pop_chunk()
         if chunk:
+            _LOGGER.info(
+                "Playing chunk #%d after %d waits: delta was %.1f ms, buffer=%d ms",
+                self._chunks_played + 1,
+                self._wait_iterations,
+                delta_us / 1000,
+                self._buffer_duration_us // 1000,
+            )
             self._play_audio(stream, chunk.pcm_data)
             self._chunks_played += 1
-            if self._chunks_played <= 5 or self._chunks_played % 500 == 0:
-                _LOGGER.debug(
-                    "Played chunk #%d (%d bytes), buffer=%d ms",
-                    self._chunks_played,
-                    len(chunk.pcm_data),
-                    self._buffer_duration_us // 1000,
-                )
+            self._wait_iterations = 0  # Reset for next chunk
 
     def _peek_next_chunk(self) -> Optional[AudioChunk]:
         """Peek at the next chunk without removing it."""
