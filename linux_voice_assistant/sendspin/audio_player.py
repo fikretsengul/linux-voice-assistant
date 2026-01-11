@@ -169,7 +169,7 @@ class SendspinAudioPlayer:
         clock_sync: KalmanClockSync,
         output_device: Optional[str] = None,
         mpv_audio_device: Optional[str] = None,
-        buffer_capacity_us: int = 2_000_000,
+        buffer_capacity_us: int = 15_000_000,  # 15 seconds - server sends chunks 3-6s early
         on_state_change: Optional[Callable[[str], None]] = None,
     ) -> None:
         """Initialize the audio player.
@@ -294,13 +294,20 @@ class SendspinAudioPlayer:
         with self._buffer_lock:
             # Check if buffer is full
             if self._buffer_duration_us >= self._buffer_capacity_us:
-                # Drop oldest chunk
+                # Drop oldest chunk - this shouldn't happen often with 15s buffer
                 if self._buffer:
                     old = self._buffer.popleft()
                     old_samples = len(old.pcm_data) // (self._channels * 2)
                     old_duration = int(old_samples * 1_000_000 / self._sample_rate)
                     self._buffer_duration_us -= old_duration
                     self._chunks_dropped += 1
+                    if self._chunks_dropped <= 5 or self._chunks_dropped % 50 == 0:
+                        _LOGGER.warning(
+                            "Buffer overflow: dropped chunk #%d (buffer=%d ms, capacity=%d ms)",
+                            self._chunks_dropped,
+                            self._buffer_duration_us // 1000,
+                            self._buffer_capacity_us // 1000,
+                        )
 
             self._buffer.append(chunk)
             self._buffer_duration_us += chunk_duration_us
