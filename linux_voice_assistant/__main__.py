@@ -472,12 +472,11 @@ def _init_sendspin(
         client = SendspinClient(
             server_url=config.sendspin.server_url,
             client_name=client_name,
+            output_device=config.audio.output_device,
             preferred_codec=config.sendspin.preferred_codec,
             buffer_capacity_ms=config.sendspin.buffer_capacity_ms,
             reconnect_delay=config.sendspin.reconnect_delay,
             clock_sync_interval=config.sendspin.clock_sync_interval,
-            loop=loop,
-            event_bus=event_bus,
         )
         state.sendspin_client = client
 
