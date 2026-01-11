@@ -296,16 +296,35 @@ class SendspinAudioPlayer:
 
     def _playback_loop(self) -> None:
         """Main playback thread loop."""
+        device = self._output_device
+
+        # Try configured device, fall back to default if it fails
+        if device is not None:
+            try:
+                # Validate device exists before opening stream
+                sd.query_devices(device)
+            except (ValueError, sd.PortAudioError) as e:
+                _LOGGER.warning(
+                    "Configured output device '%s' not found (%s), using system default",
+                    device,
+                    e,
+                )
+                device = None
+
         try:
             # Open audio stream
             with sd.OutputStream(
-                device=self._output_device,
+                device=device,
                 samplerate=self._sample_rate,
                 channels=self._channels,
                 dtype="int16",
                 blocksize=1024,
             ) as stream:
                 self._stream = stream
+                _LOGGER.info(
+                    "Sendspin audio output opened: %s",
+                    stream.device if hasattr(stream, 'device') else "default device",
+                )
 
                 # Wait for minimum buffer before starting
                 while self._playing.is_set() and not self._stop_requested.is_set():

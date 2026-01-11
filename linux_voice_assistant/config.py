@@ -79,6 +79,10 @@ class SendspinConfig:
     server_url: Optional[str] = None
     # Friendly name shown in Music Assistant (defaults to app.name)
     client_name: Optional[str] = None
+    # Audio output device for sounddevice (None = system default).
+    # This is SEPARATE from audio.output_device which uses mpv/PulseAudio naming.
+    # Use `python -m sounddevice` to list available devices.
+    output_device: Optional[str] = None
     # Preferred audio codec: "opus", "flac", or "pcm"
     preferred_codec: str = "opus"
     # Audio buffer size in milliseconds (higher = more latency but smoother)
