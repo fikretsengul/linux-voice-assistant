@@ -155,7 +155,11 @@ class SendspinAudioPlayer:
     MAX_LATE_US = 50_000  # 50ms
 
     # Maximum time to wait for early chunks (microseconds)
-    MAX_EARLY_US = 2_000_000  # 2 seconds
+    # Server sends chunks 3-4 seconds ahead for multi-room sync buffering
+    MAX_EARLY_US = 10_000_000  # 10 seconds
+
+    # Maximum single sleep duration when waiting for chunks (microseconds)
+    MAX_WAIT_SLEEP_US = 100_000  # 100ms - stay responsive while waiting
 
     # Minimum buffer level before starting playback (microseconds)
     MIN_BUFFER_US = 100_000  # 100ms
@@ -519,8 +523,10 @@ class SendspinAudioPlayer:
         # Calculate timing
         delta_us = target_time_us - current_time_us
 
-        # Debug logging for first few chunks and periodically
-        if self._chunks_played < 5 or self._chunks_played % 500 == 0:
+        # Debug logging for first few played chunks and periodically
+        # Only log when we're about to play (delta <= MAX_WAIT_SLEEP) to avoid spam during wait
+        should_log = (self._chunks_played < 5 or self._chunks_played % 500 == 0) and delta_us <= self.MAX_WAIT_SLEEP_US
+        if should_log:
             _LOGGER.debug(
                 "Chunk timing: server_ts=%d, target_local=%d, current=%d, delta=%d us (%.1f ms), offset=%.0f us",
                 chunk.timestamp_us,
@@ -532,19 +538,25 @@ class SendspinAudioPlayer:
             )
 
         if delta_us > self.MAX_EARLY_US:
-            # Way too early, wait a bit
-            if self._chunks_received < 10:
-                _LOGGER.warning(
-                    "Chunk too early: delta=%d us (%.1f s) > MAX_EARLY=%d us",
-                    delta_us, delta_us / 1_000_000, self.MAX_EARLY_US
-                )
-            time.sleep(0.01)
+            # Way too early - this indicates a severe sync issue
+            _LOGGER.warning(
+                "Chunk extremely early: delta=%.1f s > MAX_EARLY=%.1f s - possible clock sync issue",
+                delta_us / 1_000_000, self.MAX_EARLY_US / 1_000_000
+            )
+            time.sleep(0.1)
             return
 
         if delta_us > 0:
-            # Early, wait until it's time
-            wait_seconds = delta_us / 1_000_000
+            # Chunk is early, wait for it (in small increments to stay responsive)
+            wait_us = min(delta_us, self.MAX_WAIT_SLEEP_US)
+            wait_seconds = wait_us / 1_000_000
             time.sleep(wait_seconds)
+
+            # If we haven't waited the full delta, return and re-check
+            # This keeps the thread responsive during long waits
+            if delta_us > self.MAX_WAIT_SLEEP_US:
+                return
+
             self._set_sync_state(SyncState.SYNCHRONIZED)
 
         elif delta_us < -self.MAX_LATE_US:
