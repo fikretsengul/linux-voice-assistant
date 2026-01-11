@@ -491,7 +491,6 @@ def _init_sendspin(
             buffer_capacity_ms=config.sendspin.buffer_capacity_ms,
             reconnect_delay=config.sendspin.reconnect_delay,
             clock_sync_interval=config.sendspin.clock_sync_interval,
-            low_latency_mode=config.sendspin.low_latency_mode,
         )
         state.sendspin_client = client
 

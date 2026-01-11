@@ -91,10 +91,6 @@ class SendspinConfig:
     reconnect_delay: float = 5.0
     # Seconds between clock synchronization messages
     clock_sync_interval: float = 5.0
-    # Low latency mode: play chunks immediately instead of waiting for timestamps.
-    # Reduces play delay from ~6s to ~0.5s but breaks multi-room sync.
-    # Only enable if using a single player (no multi-room sync needed).
-    low_latency_mode: bool = False
 
 
 @dataclass

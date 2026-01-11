@@ -73,7 +73,6 @@ class SendspinClient:
         buffer_capacity_ms: int = 15000,
         reconnect_delay: float = 5.0,
         clock_sync_interval: float = 5.0,
-        low_latency_mode: bool = False,
         on_connection_change: Optional[Callable[[str], None]] = None,
         on_volume_change: Optional[Callable[[int], None]] = None,
     ) -> None:
@@ -89,8 +88,6 @@ class SendspinClient:
             buffer_capacity_ms: Audio buffer size in milliseconds
             reconnect_delay: Seconds between reconnection attempts
             clock_sync_interval: Seconds between time sync messages
-            low_latency_mode: Play chunks immediately without waiting for timestamps.
-                              Reduces latency but breaks multi-room sync.
             on_connection_change: Callback when connection state changes
             on_volume_change: Callback when volume is changed by server
         """
@@ -108,7 +105,6 @@ class SendspinClient:
         self._buffer_capacity_ms = buffer_capacity_ms
         self._reconnect_delay = reconnect_delay
         self._clock_sync_interval = clock_sync_interval
-        self._low_latency_mode = low_latency_mode
         self._on_connection_change = on_connection_change
         self._on_volume_change = on_volume_change
 
@@ -392,7 +388,6 @@ class SendspinClient:
                 output_device=self._output_device,
                 mpv_audio_device=self._mpv_audio_device,
                 buffer_capacity_us=self._buffer_capacity_ms * 1000,
-                low_latency_mode=self._low_latency_mode,
                 on_state_change=self._on_sync_state_change,
             )
 

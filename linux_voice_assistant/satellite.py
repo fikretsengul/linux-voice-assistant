@@ -1,5 +1,6 @@
 """Voice satellite protocol."""
 
+import subprocess
 import asyncio
 import functools
 import hashlib
@@ -134,16 +135,35 @@ class VoiceSatelliteProtocol(APIServer):
             self.unduck()
             self.state.active_wake_words.discard(self.state.stop_word.id)
             self.state.event_bus.publish("voice_idle")
+            # Mute speaker to hide HFP background noise
+            self._mute_speaker(True)
         elif new_state == SatelliteState.LISTENING:
+            self._mute_speaker(False)  # Unmute for feedback sounds
             self.duck()
             self.state.event_bus.publish("voice_listen")
         elif new_state == SatelliteState.THINKING:
             self.state.event_bus.publish("voice_thinking")
         elif new_state == SatelliteState.RESPONDING:
+            self._mute_speaker(False)  # Unmute for TTS
             self.state.active_wake_words.add(self.state.stop_word.id)
             self.state.event_bus.publish("voice_responding")
         elif new_state == SatelliteState.ERROR:
+            self._mute_speaker(False)  # Unmute for error sounds
             self.state.event_bus.publish("voice_error")
+
+    def _mute_speaker(self, mute: bool) -> None:
+        """Mute/unmute the Bluetooth speaker to hide HFP noise during idle."""
+        try:
+            mute_value = "1" if mute else "0"
+            subprocess.run(
+                ["pactl", "set-sink-mute", "@DEFAULT_SINK@", mute_value],
+                check=False,
+                capture_output=True,
+                timeout=2,
+            )
+            _LOGGER.debug("Speaker mute set to: %s", mute)
+        except Exception as e:
+            _LOGGER.warning("Failed to set speaker mute: %s", e)
 
     # -------------------------------------------------------------------------
     # Voice assistant events
