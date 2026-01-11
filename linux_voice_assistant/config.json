@@ -33,7 +33,7 @@
     "host": null
   },
   "sendspin": {
-    "server_url": "ws://192.168.1.77:8927/sendspin",
+    "server_url": "ws://10.66.107.233:8927/sendspin",
     "preferred_codec": "opus",
     "client_name": "Living Room Speaker"
   }
