@@ -130,9 +130,10 @@ class ClientHello:
         if self.device_info:
             payload["device_info"] = self.device_info
 
-        # Add player@v1 support if player role is declared
+        # Add player support if player role is declared
+        # Note: Music Assistant's aiosendspin expects "player_support" not "player@v1_support"
         if "player@v1" in self.supported_roles:
-            payload["player@v1_support"] = {
+            payload["player_support"] = {
                 "supported_formats": [f.to_dict() for f in self.supported_formats],
                 "buffer_capacity": self.buffer_capacity,
                 "supported_commands": self.supported_commands,
