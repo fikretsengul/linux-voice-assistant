@@ -172,6 +172,9 @@ async def main() -> None:
     if config.sendspin.enabled:
         _init_sendspin(loop, event_bus, state, config)
 
+    # --- 7.9. Mute speaker before audio engine starts (to avoid HFP noise) ---
+    _mute_speaker_at_startup()
+
     # --- 8. Start Audio Engine ---
     audio_engine = AudioEngine(state, mic, config.audio.input_block_size)
     audio_engine.start()
@@ -519,6 +522,24 @@ async def _run_server(state: ServerState, config: Config):
         )
         await server.serve_forever()
 
+def _mute_speaker_at_startup() -> None:
+    """Mute the Bluetooth speaker at startup to prevent HFP noise."""
+    import subprocess
+    try:
+        # Try specific BT sink first
+        sinks = ["bluez_output.70_4F_08_02_D9_7E.1", "@DEFAULT_SINK@"]
+        for sink in sinks:
+            result = subprocess.run(
+                ["pactl", "set-sink-mute", sink, "1"],
+                check=False,
+                capture_output=True,
+                timeout=2,
+            )
+            if result.returncode == 0:
+                _LOGGER.debug("Startup: Speaker muted (sink: %s)", sink)
+                return
+    except Exception as e:
+        _LOGGER.warning("Failed to mute speaker at startup: %s", e)
 
 if __name__ == "__main__":
     asyncio.run(main())

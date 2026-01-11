@@ -155,13 +155,19 @@ class VoiceSatelliteProtocol(APIServer):
         """Mute/unmute the Bluetooth speaker to hide HFP noise during idle."""
         try:
             mute_value = "1" if mute else "0"
-            subprocess.run(
-                ["pactl", "set-sink-mute", "@DEFAULT_SINK@", mute_value],
-                check=False,
-                capture_output=True,
-                timeout=2,
-            )
-            _LOGGER.debug("Speaker mute set to: %s", mute)
+            # Try specific BT sink first, then fallback
+            sinks = ["bluez_output.70_4F_08_02_D9_7E.1", "@DEFAULT_SINK@"]
+            for sink in sinks:
+                result = subprocess.run(
+                    ["pactl", "set-sink-mute", sink, mute_value],
+                    check=False,
+                    capture_output=True,
+                    timeout=2,
+                )
+                if result.returncode == 0:
+                    _LOGGER.debug("Speaker mute set to: %s (sink: %s)", mute, sink)
+                    return
+            _LOGGER.warning("Failed to mute any sink")
         except Exception as e:
             _LOGGER.warning("Failed to set speaker mute: %s", e)
 
